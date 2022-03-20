@@ -17,54 +17,58 @@ import (
 )
 
 // 获取信息
-func GetInfor(count int, ch1 <-chan string, client *http.Client, ch2 chan<- types.User, done <-chan interface{}) {
+func GetInfor(ch1 []chan string, client *http.Client, ch2 chan<- types.User, done chan interface{}) {
 	var user types.User
 
-	fmt.Printf("信息正在获取中...(work %d)\n", count)
-	for {
-		select {
-		case id, ok := <-ch1:
-			if ok {
+	for i := 0; i < len(ch1); i++ {
+		fmt.Printf("信息正在获取中...(work %d)\n", i+1)
+		// 否则会发生闭包
+		go func(i int) {
+			for {
+				select {
+				case id, ok := <-ch1[i]:
+					if ok {
+						url := "http://kjyy.ccnu.edu.cn/ClientWeb/pro/ajax/data/searchAccount.aspx?type=logonname&ReservaApply=ReservaApply&term=" + id + "&_=1647259625553"
+						req, err := http.NewRequest("GET", url, nil)
 
-				url := "http://kjyy.ccnu.edu.cn/ClientWeb/pro/ajax/data/searchAccount.aspx?type=logonname&ReservaApply=ReservaApply&term=" + id + "&_=1647259625553"
-				req, err := http.NewRequest("GET", url, nil)
+						tools.CommonErr(err)
 
-				tools.CommonErr(err)
+						resp, err := client.Do(req)
 
-				resp, err := client.Do(req)
+						clienterr := CookieErr(err)
 
-				clienterr := CookieErr(err)
+						// 防止爬取时，cookie失效
+						if clienterr != nil {
+							resp, _ = clienterr.Do(req)
+						}
 
-				// 防止爬取时，cookie失效
-				if clienterr != nil {
-					resp, _ = clienterr.Do(req)
+						body, err := io.ReadAll(resp.Body)
+
+						tools.CommonErr(err)
+
+						name_reg := regexp.MustCompile(`"name": "(.*?)"`)
+						re := name_reg.FindAllStringSubmatch(string(body), -1)
+
+						user.Id = id
+
+						if len(re) == 0 {
+							user.Name = "查无此人"
+						} else {
+							user.Name = re[0][1]
+						}
+
+						ch2 <- user
+						time.Sleep(200 * time.Millisecond) // 适当停止一下，防止访问次数过多导致要重新获取
+					}
+				case <-done:
+					fmt.Printf("work %d死亡\n", i+1)
+					return
+				case <-time.After(1 * time.Second):
+					fmt.Printf("work %d非正常死亡!\n", i+1)
+					return
 				}
-
-				body, err := io.ReadAll(resp.Body)
-
-				tools.CommonErr(err)
-
-				name_reg := regexp.MustCompile(`"name": "(.*?)"`)
-				re := name_reg.FindAllStringSubmatch(string(body), -1)
-
-				user.Id = id
-
-				if len(re) == 0 {
-					user.Name = "查无此人"
-				} else {
-					user.Name = re[0][1]
-				}
-
-				ch2 <- user
-				time.Sleep(200 * time.Millisecond) // 适当停止一下，防止访问次数过多导致要重新获取
 			}
-		case <-done:
-			fmt.Printf("work %d死亡\n", count)
-			return
-		case <-time.After(1 * time.Second):
-			fmt.Printf("work %d非正常死亡!\n", count)
-			return
-		}
+		}(i)
 	}
 }
 
@@ -136,11 +140,12 @@ func CookieErr(err error) *http.Client {
 	tools.CommonErr(errnew)
 
 	client := http.Client{
-		Timeout: 5 * time.Second,
+		Timeout: 10 * time.Second,
 		Jar:     jar,
 	}
 	if err != nil {
 		GetCookie(&client, config.Username, config.Password)
+		//log.Println("err:", err)
 		return &client
 	}
 	return nil
